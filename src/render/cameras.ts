@@ -14,6 +14,9 @@ export class CameraRig {
   private transFrom = new THREE.Matrix4();
   private smoothPos = new THREE.Vector3(0, 1.5, 2.1);
   private smoothLook = new THREE.Vector3(0, 0, 0);
+  /** 第三人称落点（切回第三人称时按瞄准方向重算，距离/高度与开局全景一致） */
+  private orbitPos = new THREE.Vector3(0, 1.5, 2.1);
+  private orbitLook = new THREE.Vector3(0, 0.02, 0);
 
   constructor(public camera: THREE.PerspectiveCamera, dom: HTMLElement) {
     this.controls = new OrbitControls(camera, dom);
@@ -33,6 +36,15 @@ export class CameraRig {
     this.transition = 0.5;
     this.mode = mode;
     this.controls.enabled = mode === 'orbit';
+    if (mode === 'orbit') {
+      // 切到第三人称：面向球杆所指方向，拉远到开局全景的距离
+      const f = this.aimFocus;
+      const D = 2.25;
+      const H = 1.55;
+      this.orbitPos.set(f.x - f.dx * D, H, f.z - f.dz * D);
+      this.orbitLook.set(0, 0.02, 0);
+      this.controls.target.copy(this.orbitLook);
+    }
   }
 
   /** 第一人称：相机置于白球后方看向瞄准方向 */
@@ -52,8 +64,8 @@ export class CameraRig {
       const look = new THREE.Vector3(0, 0, 0);
       return { pos, look };
     }
-    // orbit：保持当前
-    return { pos: this.camera.position.clone(), look: this.controls.target.clone() };
+    // orbit：切换期间平滑到预设落点；稳定后由 OrbitControls 接管
+    return { pos: this.orbitPos.clone(), look: this.orbitLook.clone() };
   }
 
   update(dt: number) {
@@ -82,6 +94,9 @@ export class CameraRig {
   resetView() {
     this.camera.position.set(0, 1.5, 2.1);
     this.controls.target.set(0, 0.02, 0);
+    this.orbitPos.set(0, 1.5, 2.1);
+    this.orbitLook.set(0, 0.02, 0);
+    this.smoothPos.set(0, 1.5, 2.1);
     this.controls.update();
   }
 }

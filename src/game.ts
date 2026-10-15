@@ -47,7 +47,6 @@ export class Game {
   private aimTarget = 0; // 鼠标指向的目标角度
   private power = 0;
   private charging = false;
-  private chargeStartY = 0;
   private spaceCharging = false;
   private eventIdx = 0; // 已处理的物理事件游标
   private settleTimer = 0;
@@ -129,7 +128,7 @@ export class Game {
     this.hud.updateRules(this.rules);
     this.hud.hideOverlay();
     this.hud.setAiThinking(false);
-    this.hud.setHint('移动鼠标瞄准 · 按住鼠标向后拉蓄力 · 松开击球 · V 切换视角');
+    this.updateHint();
     this.ballRenderer.reset(balls);
     this.rig.resetView();
     this.guide.hide();
@@ -164,53 +163,66 @@ export class Game {
 
   // ── 输入 ─────────────────────────────────────────────
 
-  private bindInput(canvas: HTMLCanvasElement) {
-    let dragging = false;
+  /** 第一人称鼠标锁定灵敏度（弧度/像素），越小越稳 */
+  static readonly AIM_SENS = 0.0011;
 
+  private fpLocked(): boolean {
+    return document.pointerLockElement !== null;
+  }
+
+  private bindInput(canvas: HTMLCanvasElement) {
     canvas.addEventListener('pointermove', (e) => {
+      // 第一人称 + 鼠标锁定：相对移动瞄准（恒定灵敏度，精确）
+      if (this.rig.mode === 'aim' && this.fpLocked()) {
+        if (this.phase === 'aiming' || this.phase === 'charging') {
+          const me = e as PointerEvent & { movementX?: number };
+          if (me.movementX) this.aimTarget += me.movementX * Game.AIM_SENS;
+        }
+        return;
+      }
       this.pointerNdc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
       if (this.phase === 'aiming' && !this.charging) {
-        const pt = this.raycastTable();
-        if (pt) {
-          const cue = this.cue;
-          const dx = pt.x - cue.x;
-          const dz = pt.z - cue.z;
-          // 死区：指针离白球太近时角度放大效应严重，忽略
-          if (Math.hypot(dx, dz) > 0.06) this.aimTarget = Math.atan2(dz, dx);
+        // 拖动视角（按住鼠标）时球杆不跟随；指针须落在台面范围内才更新瞄准
+        if (e.buttons === 0) {
+          const pt = this.raycastTable();
+          const m = 0.06;
+          if (pt && Math.abs(pt.x) < TABLE.L / 2 + m && Math.abs(pt.z) < TABLE.W / 2 + m) {
+            const cue = this.cue;
+            const dx = pt.x - cue.x;
+            const dz = pt.z - cue.z;
+            // 死区：指针离白球太近时角度放大效应严重，忽略
+            if (Math.hypot(dx, dz) > 0.06) this.aimTarget = Math.atan2(dz, dx);
+          }
         }
       } else if (this.phase === 'placing') {
         const pt = this.raycastTable();
         if (pt) this.updatePlacing(pt.x, pt.z);
-      } else if (this.charging && dragging) {
-        this.power = Math.min(1, Math.max(0, (e.clientY - this.chargeStartY) / 240));
-        this.hud.setPower(this.power);
       }
     });
 
     canvas.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       this.audio.ensure();
-      if (this.phase === 'aiming') {
-        this.charging = true;
-        dragging = true;
-        this.chargeStartY = e.clientY;
-        this.phase = 'charging';
-      } else if (this.phase === 'placing') {
+      // 第一人称未锁定：第一次点击进入鼠标锁定（不击球）
+      if (this.rig.mode === 'aim' && !this.fpLocked() && (this.phase === 'aiming' || this.phase === 'charging')) {
+        canvas.requestPointerLock();
+        return;
+      }
+      if (this.phase === 'placing') {
         if (this.placing.valid) this.confirmPlacing();
       }
     });
 
-    window.addEventListener('pointerup', () => {
-      if (this.phase === 'charging' && this.charging) {
-        this.charging = false;
-        dragging = false;
-        if (this.power > 0.03) this.shoot(this.power, this.hud.spin.a, this.hud.spin.b);
-        else {
-          this.phase = 'aiming';
-          this.power = 0;
-          this.hud.setPower(0);
-        }
+    // 右键解除鼠标锁定（去点杆法控件等）
+    canvas.addEventListener('contextmenu', (e) => {
+      if (this.fpLocked()) {
+        e.preventDefault();
+        document.exitPointerLock();
       }
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+      this.updateHint();
     });
 
     canvas.addEventListener('wheel', (e) => {
@@ -225,7 +237,14 @@ export class Game {
       if (e.repeat) return;
       switch (e.code) {
         case 'KeyV':
-          this.rig.setMode(this.rig.mode === 'aim' ? 'orbit' : 'aim');
+          if (this.rig.mode === 'aim') {
+            if (this.fpLocked()) document.exitPointerLock();
+            this.rig.setMode('orbit');
+            this.updateHint();
+          } else {
+            this.rig.setMode('aim');
+            this.updateHint();
+          }
           break;
         case 'KeyG':
           this.showGuide = !this.showGuide;
@@ -241,17 +260,21 @@ export class Game {
           break;
         case 'ArrowLeft':
           if (this.phase === 'aiming' || this.phase === 'charging') {
+            e.preventDefault();
             this.aimAngle -= 0.004;
             this.aimTarget = this.aimAngle;
           }
           break;
         case 'ArrowRight':
           if (this.phase === 'aiming' || this.phase === 'charging') {
+            e.preventDefault();
             this.aimAngle += 0.004;
             this.aimTarget = this.aimAngle;
           }
           break;
         case 'Space':
+          // 阻止默认行为：否则松开空格会"点击"持有焦点的按钮（重开/难度等），导致击球后被意外重开
+          e.preventDefault();
           if (this.phase === 'aiming') {
             this.audio.ensure();
             this.spaceCharging = true;
@@ -279,12 +302,26 @@ export class Game {
 
   private bindHud() {
     const b = this.hud.buttons;
+    this.hud.onGuideColor = (hex) => this.guide.setColor(hex);
+    this.guide.setColor(this.hud.guideColor);
+    // 按钮点击后立即失焦，避免随后按空格触发按钮的默认激活
+    document.querySelectorAll('#toolbar button, #overlay button, .diff-row button').forEach((btn) => {
+      btn.addEventListener('click', () => (btn as HTMLButtonElement).blur());
+    });
     b.btnStart.addEventListener('click', () => {
       this.audio.ensure();
       this.newGame(this.difficulty);
     });
     b.btnAgain.addEventListener('click', () => this.newGame(this.difficulty));
-    b.btnCam.addEventListener('click', () => this.rig.setMode(this.rig.mode === 'aim' ? 'orbit' : 'aim'));
+    b.btnCam.addEventListener('click', () => {
+      if (this.rig.mode === 'aim') {
+        if (this.fpLocked()) document.exitPointerLock();
+        this.rig.setMode('orbit');
+      } else {
+        this.rig.setMode('aim');
+      }
+      this.updateHint();
+    });
     b.btnGuide.addEventListener('click', () => {
       this.showGuide = !this.showGuide;
       this.guide.visible = this.showGuide;
@@ -301,6 +338,25 @@ export class Game {
         this.difficulty = btn.dataset.diff as Difficulty;
       });
     });
+  }
+
+  /** 按当前视角/锁定状态更新底部操作提示 */
+  private updateHint() {
+    if (this.phase === 'placing') {
+      this.hud.setHint('自由球：移动鼠标选择白球位置，点击放置');
+      return;
+    }
+    if (this.rig.mode === 'aim') {
+      this.hud.setHint(
+        this.fpLocked()
+          ? '移动鼠标瞄准 · 按住空格蓄力，松开击球 · 滚轮微调 · 右键/Esc 释放鼠标'
+          : '点击画面锁定鼠标进入精确瞄准 · 滚轮微调 · 空格蓄力击球'
+      );
+    } else {
+      this.hud.setHint('移动鼠标瞄准 · 按住左键拖动旋转视角 · 空格蓄力击球 · V 切换视角');
+    }
+    const cross = document.getElementById('crosshair');
+    if (cross) cross.style.display = this.rig.mode === 'aim' && this.fpLocked() ? 'block' : 'none';
   }
 
   private raycastTable(): { x: number; z: number } | null {
@@ -458,7 +514,7 @@ export class Game {
     (mesh.material as THREE.MeshPhysicalMaterial).emissive.set(0x000000);
     this.rules = { ...this.rules, ballInHand: false };
     this.phase = 'aiming';
-    this.hud.setHint('移动鼠标瞄准 · 按住鼠标向后拉蓄力 · 松开击球 · V 切换视角');
+    this.updateHint();
     this.initAimFromCue();
   }
 
@@ -591,7 +647,7 @@ export class Game {
       if (this.aiTimer <= 0 && this.aiPlan) {
         const plan = this.aiPlan;
         this.aiPlan = null;
-        this.hud.setHint('移动鼠标瞄准 · 按住鼠标向后拉蓄力 · 松开击球 · V 切换视角');
+        this.updateHint();
         this.shootAiPlan(plan);
       }
     }

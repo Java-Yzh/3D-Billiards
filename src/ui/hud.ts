@@ -35,8 +35,46 @@ export class Hud {
   spin = { a: 0, b: 0 }; // a: 左右塞(+=右), b: 高低杆(+=高)
   onSpinChange: (() => void) | null = null;
 
+  /** 辅助线可选颜色（常用色） */
+  static readonly GUIDE_COLORS = [
+    { hex: 0xffffff, css: '#ffffff', name: '白' },
+    { hex: 0x35e065, css: '#35e065', name: '绿' },
+    { hex: 0xffd23e, css: '#ffd23e', name: '黄' },
+    { hex: 0xff5a4d, css: '#ff5a4d', name: '红' },
+    { hex: 0x35d4e0, css: '#35d4e0', name: '青' },
+  ];
+  onGuideColor: ((hex: number) => void) | null = null;
+  guideColor = 0xffffff;
+
   constructor() {
     this.initSpinWidget();
+    this.initGuideColors();
+  }
+
+  private initGuideColors() {
+    const box = document.getElementById('guide-colors')!;
+    const saved = localStorage.getItem('guideColor');
+    let initial = Hud.GUIDE_COLORS[0].hex;
+    if (saved) {
+      const n = parseInt(saved, 10);
+      if (Hud.GUIDE_COLORS.some((c) => c.hex === n)) initial = n;
+    }
+    this.guideColor = initial;
+    for (const c of Hud.GUIDE_COLORS) {
+      const d = document.createElement('div');
+      d.className = 'swatch';
+      d.style.background = c.css;
+      d.title = `辅助线颜色：${c.name}`;
+      if (c.hex === initial) d.classList.add('sel');
+      d.addEventListener('click', () => {
+        box.querySelectorAll('.swatch').forEach((s) => s.classList.remove('sel'));
+        d.classList.add('sel');
+        this.guideColor = c.hex;
+        localStorage.setItem('guideColor', String(c.hex));
+        this.onGuideColor?.(c.hex);
+      });
+      box.appendChild(d);
+    }
   }
 
   private redrawSpin(c: HTMLCanvasElement, ctx: CanvasRenderingContext2D) {

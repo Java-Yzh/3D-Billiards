@@ -98,10 +98,10 @@ export class GuideLine {
     const a = mkLine(0xffffff, 0.75);
     this.mainLine = a.line;
     this.mainGeom = a.geom;
-    const b = mkLine(0x7dffa0, 0.9);
+    const b = mkLine(0xffffff, 0.95);
     this.targetLine = b.line;
     this.targetGeom = b.geom;
-    const c = mkLine(0xffffff, 0.4);
+    const c = mkLine(0xffffff, 0.45);
     this.cueLine = c.line;
     this.cueGeom = c.geom;
 
@@ -112,6 +112,14 @@ export class GuideLine {
     this.group.add(this.ghost);
 
     this.group.visible = false;
+  }
+
+  /** 设置辅助线颜色（应用于全部线段与幽灵球，透明度层级保持不变） */
+  setColor(color: number): void {
+    (this.mainLine.material as THREE.LineBasicMaterial).color.setHex(color);
+    (this.targetLine.material as THREE.LineBasicMaterial).color.setHex(color);
+    (this.cueLine.material as THREE.LineBasicMaterial).color.setHex(color);
+    (this.ghost.material as THREE.MeshBasicMaterial).color.setHex(color);
   }
 
   show(cueX: number, cueZ: number, pv: AimPreview) {
