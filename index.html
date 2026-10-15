@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D 台球 · 中式八球</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #07080c; }
+      body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; color: #eee; }
+      #canvas { position: fixed; inset: 0; display: block; }
+
+      #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+      #hud .clickable { pointer-events: auto; }
+
+      /* 顶栏 */
+      #topbar {
+        position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+        display: flex; align-items: center; gap: 18px;
+        background: rgba(10, 14, 20, 0.72); border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 12px; padding: 8px 16px; backdrop-filter: blur(8px);
+      }
+      .player { display: flex; flex-direction: column; gap: 3px; min-width: 150px; }
+      .player.right { align-items: flex-end; }
+      .player .pname { font-size: 13px; color: #aab; letter-spacing: 1px; }
+      .player.active .pname { color: #ffd866; }
+      .player.active .pname::before { content: "▶ "; font-size: 10px; }
+      .player .pgroup { font-size: 11px; color: #778; }
+      .player .pballs { display: flex; gap: 3px; flex-wrap: wrap; max-width: 170px; min-height: 14px; }
+      .miniball {
+        width: 13px; height: 13px; border-radius: 50%; position: relative;
+        box-shadow: inset -2px -3px 4px rgba(0,0,0,0.45), inset 2px 2px 3px rgba(255,255,255,0.25);
+      }
+      .miniball.potted { opacity: 0.22; filter: grayscale(0.8); }
+      .miniball.stripe { background: linear-gradient(to bottom, #f2eee2 20%, var(--c) 20%, var(--c) 80%, #f2eee2 80%); }
+      .miniball.solid { background: var(--c); }
+      .miniball.eight { background: #161616; }
+      #turn-indicator { font-size: 14px; font-weight: 600; color: #ffd866; min-width: 90px; text-align: center; }
+
+      /* 工具栏 */
+      #toolbar { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 6px; }
+      #toolbar button {
+        pointer-events: auto; cursor: pointer;
+        background: rgba(16, 22, 30, 0.85); color: #ccd; border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 8px; padding: 7px 12px; font-size: 12px; transition: all 0.15s;
+      }
+      #toolbar button:hover { background: rgba(40, 52, 68, 0.95); color: #fff; }
+
+      /* 杆法控件 */
+      #spin-widget {
+        position: absolute; right: 20px; bottom: 20px; text-align: center;
+      }
+      #spin-canvas { pointer-events: auto; cursor: crosshair; border-radius: 50%; box-shadow: 0 4px 18px rgba(0,0,0,0.5); }
+      #spin-widget .spin-tip { font-size: 11px; color: #889; margin-top: 4px; }
+
+      /* 力度条 */
+      #power-wrap { position: absolute; left: 20px; bottom: 20px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+      #power-bar {
+        width: 16px; height: 220px; border-radius: 8px; overflow: hidden;
+        background: rgba(14, 20, 28, 0.8); border: 1px solid rgba(255,255,255,0.12); position: relative;
+      }
+      #power-fill {
+        position: absolute; bottom: 0; left: 0; right: 0; height: 0%;
+        background: linear-gradient(to top, #3fae5a, #e8c33a, #d84b3a); transition: height 0.04s;
+      }
+      #power-label { font-size: 11px; color: #889; }
+      #power-pct { font-size: 13px; color: #dde; font-weight: 600; }
+
+      /* 提示与 toast */
+      #hint {
+        position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+        font-size: 12px; color: rgba(200, 210, 225, 0.65); white-space: nowrap;
+      }
+      #toast {
+        position: absolute; top: 84px; left: 50%; transform: translateX(-50%);
+        display: flex; flex-direction: column; gap: 6px; align-items: center;
+      }
+      .toast-item {
+        background: rgba(20, 28, 40, 0.92); border: 1px solid rgba(255,255,255,0.15);
+        padding: 8px 18px; border-radius: 10px; font-size: 14px; animation: toastIn 0.25s ease;
+      }
+      .toast-item.foul { border-color: rgba(230, 80, 70, 0.6); color: #ff9d95; }
+      .toast-item.good { border-color: rgba(90, 200, 120, 0.6); color: #9fe8b2; }
+      @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+
+      #ai-status {
+        position: absolute; top: 84px; left: 50%; transform: translateX(-50%);
+        display: none; align-items: center; gap: 8px;
+        background: rgba(20, 28, 40, 0.92); border-radius: 10px; padding: 8px 16px; font-size: 13px;
+      }
+      #ai-status.show { display: flex; }
+      .spinner {
+        width: 14px; height: 14px; border-radius: 50%;
+        border: 2px solid rgba(255,255,255,0.2); border-top-color: #ffd866;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      /* 覆盖层（菜单 / 结束） */
+      #overlay {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        background: rgba(4, 6, 10, 0.78); backdrop-filter: blur(6px); pointer-events: auto;
+      }
+      #overlay.hidden { display: none; }
+      .panel {
+        background: rgba(16, 22, 32, 0.95); border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 16px; padding: 36px 48px; text-align: center; max-width: 460px;
+      }
+      .panel h1 { font-size: 30px; margin-bottom: 6px; letter-spacing: 2px; }
+      .panel h1 span { color: #ffd866; }
+      .panel .sub { color: #8899aa; font-size: 13px; margin-bottom: 24px; }
+      .diff-row { display: flex; gap: 10px; justify-content: center; margin-bottom: 24px; }
+      .diff-row button {
+        cursor: pointer; border-radius: 10px; padding: 10px 20px; font-size: 14px;
+        background: rgba(30, 40, 55, 0.9); color: #ccd; border: 1px solid rgba(255,255,255,0.12);
+      }
+      .diff-row button.sel { background: #2c65ff22; border-color: #7aa2ff; color: #cfe0ff; }
+      #btn-start, #btn-again {
+        cursor: pointer; border: none; border-radius: 12px; padding: 13px 44px; font-size: 17px; font-weight: 600;
+        background: linear-gradient(135deg, #2f6fe4, #7a3fe2); color: #fff; letter-spacing: 2px;
+      }
+      #btn-start:hover, #btn-again:hover { filter: brightness(1.15); }
+      .help { margin-top: 22px; font-size: 12px; color: #778899; line-height: 1.9; text-align: left; }
+      .help b { color: #aabbcc; }
+      #final-title { font-size: 34px; margin-bottom: 8px; }
+      #final-sub { color: #99a; font-size: 14px; margin-bottom: 26px; }
+
+      /* 移动端不适配提示不做，桌面为主 */
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <div id="hud">
+      <div id="topbar">
+        <div class="player" id="p0">
+          <span class="pname">你</span>
+          <span class="pgroup" id="g0">未分组</span>
+          <div class="pballs" id="balls0"></div>
+        </div>
+        <div id="turn-indicator">—</div>
+        <div class="player right" id="p1">
+          <span class="pname">AI</span>
+          <span class="pgroup" id="g1">未分组</span>
+          <div class="pballs" id="balls1"></div>
+        </div>
+      </div>
+
+      <div id="toolbar">
+        <button id="btn-cam">🎥 视角 (V)</button>
+        <button id="btn-guide">🎯 辅助线 (G)</button>
+        <button id="btn-sound">🔊 声音 (M)</button>
+        <button id="btn-restart">↺ 重开 (R)</button>
+      </div>
+
+      <div id="spin-widget">
+        <canvas id="spin-canvas" width="110" height="110"></canvas>
+        <div class="spin-tip">杆法（双击复位）</div>
+      </div>
+
+      <div id="power-wrap">
+        <div id="power-pct">0%</div>
+        <div id="power-bar"><div id="power-fill"></div></div>
+        <div id="power-label">力度</div>
+      </div>
+
+      <div id="toast"></div>
+      <div id="ai-status"><div class="spinner"></div><span id="ai-status-text">AI 思考中…</span></div>
+      <div id="hint">移动鼠标瞄准 · 按住鼠标向后拉蓄力 · 松开击球 · V 切换视角</div>
+
+      <div id="overlay">
+        <div class="panel" id="menu-panel">
+          <h1>3D 台球 <span>· 中式八球</span></h1>
+          <div class="sub">真实物理 · 与 AI 对战 · 第一/第三人称视角</div>
+          <div class="diff-row">
+            <button data-diff="easy">简单</button>
+            <button data-diff="normal" class="sel">普通</button>
+            <button data-diff="hard">困难</button>
+          </div>
+          <button id="btn-start">开 始 游 戏</button>
+          <div class="help">
+            <b>瞄准</b>：移动鼠标（滚轮/←→ 微调）<br />
+            <b>击球</b>：按住鼠标向后拖拽蓄力，松开击出（或按住空格）<br />
+            <b>杆法</b>：右下角球面点选击点（上=高杆 下=低杆 左右=塞）<br />
+            <b>视角</b>：V 切换第一人称 / 第三人称 · <b>辅助线</b>：G · <b>声音</b>：M
+          </div>
+        </div>
+        <div class="panel" id="over-panel" style="display: none">
+          <h1 id="final-title">胜利！</h1>
+          <div id="final-sub">—</div>
+          <button id="btn-again">再 来 一 局</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
